@@ -165,56 +165,101 @@ export function playableSmokeTest(blob, timeoutMs = 8000) {
 /*
  * Chromium exposes neither HTMLMediaElement.audioTracks nor embedded MKV/MP4
  * subtitles via textTracks, and upstream mediabunny can't read subtitle
- * streams. For embedded subtitles we fall back to the full ffmpeg core: list
- * subtitle streams via a probe `-i` (stderr is captured through the logger),
- * then extract the selected stream to SRT text.
+ * streams. Embedded subtitle metadata for Matroska/WebM is read straight from
+ * the container header (EBML Tracks element) so listing works for any file
+ * size in a few bytes of memory. Extracting a track needs ffmpeg, which copies
+ * the whole file into its WASM heap — on big files (tens or hundreds of MB)
+ * that repeatedly multiplies memory usage and can wedge the tab, so extraction
+ * is capped at a size we know stays safe.
  */
 
-async function ffSubtitleStreams(file) {
-  const ff = await ensureFfmpeg();
-  if (ffBusy) throw new EngineError('ffmpeg', 'Another conversion is already running');
-  ffBusy = true;
-  const ext = extOf(file.name) || 'bin';
-  const inName = `sub-probe.${ext}`;
-  const lines = [];
-  const onLog = d => { if (d?.message) lines.push(d.message); };
-  try {
-    ff.on?.('log', onLog);
-    await ff.writeFile(inName, new Uint8Array(await file.arrayBuffer()));
-    // returning code 1 is expected for probe-only runs (no output given)
-    try { await ff.exec(['-hide_banner', '-loglevel', 'info', '-i', inName]); } catch {}
-    const subs = [];
-    let n = 0;
-    for (const line of lines) {
-      const m = line.match(/Stream #0:(\d+)[^:]*:\s*Subtitle:\s*(\S+)/);
-      if (!m) continue;
-      const lang = (line.match(/\(([^)]{2,3})\)/) || [])[1] || null;
-      // -map 0:s:N uses per-type numbering, so expose that as `index`
-      subs.push({ index: n++, stream: +m[1], codec: m[2], language: lang });
-    }
-    return subs;
-  } finally {
-    ff.off?.('log', onLog);
-    ffBusy = false;
-    try { await ff.deleteFile(inName); } catch {}
+const SUB_EXTRACT_MAX_BYTES = 256 * 1024 * 1024;
+const SUB_CODEC_LABEL = {
+  'S_TEXT/UTF8': 'subrip', 'S_TEXT/ASCII': 'srt', 'S_TEXT/SSA': 'ssa',
+  'S_TEXT/ASS': 'ass', 'S_TEXT/WEBVTT': 'webvtt', 'S_TEXT/tx3g': 'mov_text',
+  'S_VOBSUB': 'vobsub', 'S_HDMV/PGS': 'pgs', 'S_SUP': 'pgs', 'S_DVBSUB': 'dvb',
+};
+// EBML variable-length integers: IDs keep the leading length bit in the value,
+// sizes strip it, and a size of all 1s marks "unknown" (run to buffer end).
+function vintScan(b, pos) {
+  const lead = b[pos];
+  let len = 1, mask = 0x80;
+  while (!(lead & mask)) { mask >>= 1; len++; }
+  return { len, mask };
+}
+function idAt(b, pos) {
+  const { len, mask } = vintScan(b, pos);
+  let v = b[pos] & ((mask << 1) - 1);
+  for (let i = 1; i < len; i++) v = v * 256 + b[pos + i];
+  return { val: v, data: pos + len };
+}
+function sizeAt(b, pos) {
+  const { len, mask } = vintScan(b, pos);
+  let v = b[pos] & (mask - 1);
+  for (let i = 1; i < len; i++) v = v * 256 + b[pos + i];
+  return { val: v, data: pos + len, unk: v === Math.pow(2, 7 * len) - 1 };
+}
+function elementAt(b, pos) {
+  const i = idAt(b, pos);
+  const s = sizeAt(b, i.data);
+  return { id: i.val, size: s.val, unk: s.unk, data: s.data, next: s.unk ? b.length : s.data + s.val };
+}
+const trackElem = (b, start, end) => {
+  let type = 0, codec = null, lang = null;
+  let p = start;
+  while (p + 2 <= end) {
+    const ch = elementAt(b, p);
+    const cEnd = Math.min(ch.next, end);
+    if (ch.id === 0x83 && cEnd <= b.length) type = b[ch.data];   // TrackType (u8)
+    else if (ch.id === 0x86) codec = new TextDecoder().decode(b.subarray(ch.data, cEnd));
+    else if (ch.id === 0x22B59C) lang = new TextDecoder().decode(b.subarray(ch.data, cEnd));
+    const np = cEnd;
+    if (np <= p) break;
+    p = np;
   }
+  return { type, codec, lang };
+};
+
+async function embeddedSubtitleTracks(file) {
+  // Matroska/WebM stores its Tracks element in the first segments; a few MB
+  // header read is more than enough (SeekHead + Tracks nearly always ≤ 1 MB in).
+  const head = await file.slice(0, Math.min(file.size, 8 * 1024 * 1024)).arrayBuffer();
+  const b = new Uint8Array(head);
+  if (b.length < 4 || b[0] !== 0x1A || b[1] !== 0x45 || b[2] !== 0xDF || b[3] !== 0xA3) return [];
+  const subs = [];
+  let n = 0;
+  const walk = (begin, end) => {
+    let pos = begin;
+    while (pos + 2 <= end) {
+      const e = elementAt(b, pos);
+      const dataEnd = Math.min(e.next, end);
+      const next = Math.min(e.next, b.length);
+      if (e.id === 0x18538067 || e.id === 0x1654AE6B) walk(e.data, dataEnd); // Segment / Tracks
+      else if (e.id === 0xAE) {                               // TrackEntry
+        const t = trackElem(b, e.data, dataEnd);
+        if (t.type === 0x11 && t.codec)                       // 17 = subtitle
+          subs.push({ index: n++, codec: SUB_CODEC_LABEL[t.codec] || t.codec, language: t.lang || null });
+      }
+      if (next <= pos) break;
+      pos = next;
+    }
+  };
+  walk(0, b.length);
+  return subs;
 }
 
-/**
- * List embedded subtitle tracks in a local file: [{ index, codec, language }].
- * Uses the full ffmpeg core (lazy-loaded from CDN on first call).
- */
+/** List embedded subtitle tracks in a local Matroska/WebM file (header-only). */
 export async function listEmbeddedSubtitles(file) {
-  if (file.size > FFMPEG_MAX_BYTES)
-    throw new EngineError('size', 'File is too large for in-browser subtitle extraction (limit ≈1.6 GB)');
-  return ffSubtitleStreams(file);
+  return embeddedSubtitleTracks(file);
 }
 
 /**
- * Extract one embedded subtitle track to SRT text. Stream index is what ffmpeg
- * reports (see listEmbeddedSubtitles). Returns the subtitle text.
+ * Extract one embedded subtitle track to SRT text. Stream index is the
+ * per-type number reported by listEmbeddedSubtitles. Returns the subtitle text.
  */
 export async function extractEmbeddedSubtitle(file, trackIndex) {
+  if (file.size > SUB_EXTRACT_MAX_BYTES)
+    throw new EngineError('subtitle', 'File is too large for in-browser subtitle extraction (limit 256 MB) — extract the .srt with a desktop player, then load it here');
   const ff = await ensureFfmpeg();
   if (ffBusy) throw new EngineError('ffmpeg', 'Another conversion is already running');
   ffBusy = true;
