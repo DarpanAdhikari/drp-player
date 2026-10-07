@@ -97,6 +97,12 @@ export async function probeSource(src, opts = {}) {
     if (!duration) duration = await input.computeDuration().catch(() => 0);
     const vt = await input.getPrimaryVideoTrack().catch(() => null);
     const at = await input.getPrimaryAudioTrack().catch(() => null);
+    const audioTracks = await input.getAudioTracks().catch(() => []);
+    const audioTrackList = await Promise.all(audioTracks.map(async (t, i) => ({
+      index: i, codec: t.codec,
+      name: await t.getName().catch(() => null),
+      language: await t.getLanguageCode().catch(() => null),
+    })));
     let thumb = '', width = 0, height = 0, decodable = true;
     if (vt) {
       width = (await vt.getDisplayWidth().catch(() => 0)) || 0;
@@ -119,7 +125,7 @@ export async function probeSource(src, opts = {}) {
     return {
       readable: true, duration: duration || 0, thumb, width, height, decodable,
       videoCodec: vt?.codec ?? null, audioCodec: at?.codec ?? null,
-      hasVideo: !!vt, hasAudio: !!at,
+      hasVideo: !!vt, hasAudio: !!at, audioTracks: audioTrackList,
     };
   } catch {
     return { readable: false };
@@ -153,6 +159,81 @@ export function playableSmokeTest(blob, timeoutMs = 8000) {
     v.onerror = () => finish(false);
     v.src = url;
   });
+}
+
+/* --------------------------------------------------------- subtitle probes */
+/*
+ * Chromium exposes neither HTMLMediaElement.audioTracks nor embedded MKV/MP4
+ * subtitles via textTracks, and upstream mediabunny can't read subtitle
+ * streams. For embedded subtitles we fall back to the full ffmpeg core: list
+ * subtitle streams via a probe `-i` (stderr is captured through the logger),
+ * then extract the selected stream to SRT text.
+ */
+
+async function ffSubtitleStreams(file) {
+  const ff = await ensureFfmpeg();
+  if (ffBusy) throw new EngineError('ffmpeg', 'Another conversion is already running');
+  ffBusy = true;
+  const ext = extOf(file.name) || 'bin';
+  const inName = `sub-probe.${ext}`;
+  const lines = [];
+  const onLog = d => { if (d?.message) lines.push(d.message); };
+  try {
+    ff.on?.('log', onLog);
+    await ff.writeFile(inName, new Uint8Array(await file.arrayBuffer()));
+    // returning code 1 is expected for probe-only runs (no output given)
+    try { await ff.exec(['-hide_banner', '-loglevel', 'info', '-i', inName]); } catch {}
+    const subs = [];
+    let n = 0;
+    for (const line of lines) {
+      const m = line.match(/Stream #0:(\d+)[^:]*:\s*Subtitle:\s*(\S+)/);
+      if (!m) continue;
+      const lang = (line.match(/\(([^)]{2,3})\)/) || [])[1] || null;
+      // -map 0:s:N uses per-type numbering, so expose that as `index`
+      subs.push({ index: n++, stream: +m[1], codec: m[2], language: lang });
+    }
+    return subs;
+  } finally {
+    ff.off?.('log', onLog);
+    ffBusy = false;
+    try { await ff.deleteFile(inName); } catch {}
+  }
+}
+
+/**
+ * List embedded subtitle tracks in a local file: [{ index, codec, language }].
+ * Uses the full ffmpeg core (lazy-loaded from CDN on first call).
+ */
+export async function listEmbeddedSubtitles(file) {
+  if (file.size > FFMPEG_MAX_BYTES)
+    throw new EngineError('size', 'File is too large for in-browser subtitle extraction (limit ≈1.6 GB)');
+  return ffSubtitleStreams(file);
+}
+
+/**
+ * Extract one embedded subtitle track to SRT text. Stream index is what ffmpeg
+ * reports (see listEmbeddedSubtitles). Returns the subtitle text.
+ */
+export async function extractEmbeddedSubtitle(file, trackIndex) {
+  const ff = await ensureFfmpeg();
+  if (ffBusy) throw new EngineError('ffmpeg', 'Another conversion is already running');
+  ffBusy = true;
+  const ext = extOf(file.name) || 'bin';
+  const inName = `sub-in.${ext}`, outName = 'sub-out.srt';
+  try {
+    await ff.writeFile(inName, new Uint8Array(await file.arrayBuffer()));
+    // forcing format via -f srt: ass/ssa/webvtt/mov_text/srt all convert to SRT
+    const code = await ff.exec(['-hide_banner', '-loglevel', 'error', '-i', inName,
+      '-map', `0:s:${trackIndex}`, '-f', 'srt', '-y', outName]);
+    if (code !== 0)
+      throw new EngineError('subtitle', 'Could not extract that subtitle track (image-based subtitles aren’t supported)');
+    const data = await ff.readFile(outName);
+    try { await ff.deleteFile(outName); } catch {}
+    return new TextDecoder().decode(data);
+  } finally {
+    ffBusy = false;
+    try { await ff.deleteFile(inName); } catch {}
+  }
 }
 
 /* ------------------------------------------------------ codec support plan */

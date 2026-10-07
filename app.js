@@ -5,6 +5,7 @@
 import {
   RemuxEngine, planTiers, probeSource, ffmpegConvert, playableSmokeTest,
   EngineError, TIER_LABEL, extOf, shutdownEngine,
+  listEmbeddedSubtitles, extractEmbeddedSubtitle,
 } from './engine.js';
 
 const $ = s => document.querySelector(s);
@@ -32,6 +33,7 @@ const S = {
   aspect: 'Fit',
   ab: null,                          // {a,b} loop
   marks: [], stats: false, viz: true,
+  pipAuto: true,                     // auto-enter PiP when tab loses focus
   hasSrc: false, loading: false,
   menuOpen: false,
 };
@@ -194,7 +196,7 @@ async function doProbe(it) {
   it.probe = p;
   if (p.readable && !it.dur) it.dur = p.duration;
   renderQ();
-  if (S.list[S.cur] === it) updateInfo();
+  if (S.list[S.cur] === it) { updateInfo(); renderAudioTracks(it); }
 }
 
 /* ---------------------------------------------------------------- load flow */
@@ -608,6 +610,23 @@ async function readSubFile(sub) {
     osd(`Subtitles: ${cues.length} cues`);
   } catch { osd('Could not read subtitles'); }
 }
+async function loadEmbeddedSub(src, index) {
+  const btn = document.querySelector(`#subscan [data-emb="${index}"]`);
+  if (btn) { btn.textContent = 'Extracting…'; btn.disabled = true; }
+  try {
+    const text = await extractEmbeddedSubtitle(src, index);
+    const cues = parseCues(text);
+    S.cues = cues;
+    S.sOn = true;
+    $('#bCC').classList.add('on');
+    $('#bCC2').textContent = 'Hide subtitles';
+    osd(`Embedded subtitles: ${cues.length} cues`);
+  } catch (e) {
+    osd(shortErr(e));
+  } finally {
+    if (btn) btn.remove();
+  }
+}
 function drawSubs() {
   const el = $('#sub');
   if (!S.sOn || !S.cues?.length) { if (el.textContent) el.textContent = ''; return; }
@@ -801,6 +820,30 @@ const ACT = {
     osd('Subtitles ' + (S.sOn ? 'on' : 'off'));
   },
   subload: () => $('#fsub').click(),
+  subscan: async () => {
+    const it = S.list[S.cur];
+    const box = $('#subscan');
+    if (!it?.f) { box.innerHTML = '<small>Only local files can be scanned.</small>'; return; }
+    box.innerHTML = '<small>Loading ffmpeg core…</small>';
+    const src = it.f;
+    try {
+      const subs = await listEmbeddedSubtitles(src);
+      if (S.list[S.cur] !== it) return;
+      if (!subs.length) { box.innerHTML = '<small>No embedded subtitle tracks found.</small>'; return; }
+      box.innerHTML = subs.map((s, i) =>
+        `<div class="f" style="grid-template-columns:1fr auto">
+          <span>${esc(s.language || 'Track ' + (i + 1))} · ${s.codec.toUpperCase()}</span>
+          <button class="b" data-emb="${s.index}">Load</button></div>`).join('');
+      $$('#subscan [data-emb]').forEach(b => b.addEventListener('click', () => loadEmbeddedSub(src, +b.dataset.emb)));
+    } catch (e) {
+      box.innerHTML = '<small>' + esc(shortErr(e)) + '</small>';
+    }
+  },
+  pipauto: () => {
+    S.pipAuto = !S.pipAuto;
+    $('#mPipAuto').classList.toggle('on', S.pipAuto);
+    osd('Auto PiP ' + (S.pipAuto ? 'on' : 'off'));
+  },
   sdm: () => { S.subDelay = clamp(S.subDelay - 0.1, -5, 5); $('#sdv').textContent = S.subDelay.toFixed(1) + 's'; },
   sdp: () => { S.subDelay = clamp(S.subDelay + 0.1, -5, 5); $('#sdv').textContent = S.subDelay.toFixed(1) + 's'; },
   rotl: () => { S.rot = (S.rot - 90) % 360; layout(); osd('Rotate −90°'); },
@@ -896,7 +939,7 @@ document.addEventListener('click', e => {
   audioInit(); ac?.resume?.().catch(() => {});
   if (btn.closest('#menu')) {
     updateMenu();
-    if (!['speed', 'aspect', 'ab', 'shuf', 'rep'].includes(a)) closeMenu();
+    if (!['speed', 'aspect', 'ab', 'shuf', 'rep', 'viz', 'pipauto'].includes(a)) closeMenu();
   }
 });
 
@@ -1050,19 +1093,24 @@ function applyEQ() {
 
 function renderAudioTracks(it) {
   const box = $('#atracks');
-  const tracks = it?.tier === 2 ? (it.info?.audioTracks || []) : [];
-  if (tracks.length < 2) { box.innerHTML = it?.tier === 2 ? '<small>Single audio track</small>' : ''; return; }
+  const tracks = it?.probe?.audioTracks?.length
+    ? it.probe.audioTracks
+    : (it?.tier === 2 ? (it.info?.audioTracks || []) : []);
+  if (!tracks.length) { box.innerHTML = ''; return; }
   box.innerHTML = `<div class="f" style="grid-template-columns:92px 1fr">
     <span>Track</span>
     <select id="atrack">${tracks.map(t =>
-      `<option value="${t.index}" ${t.index === (it.info?.audioIndex ?? 0) ? 'selected' : ''}>
-        ${esc(t.name || t.language || 'Track ' + (t.index + 1))} · ${shortCodec(t.codec)}</option>`).join('')}</select></div>`;
+      `<option value="${t.index}" ${t.index === (it.ai ?? 0) ? 'selected' : ''}>
+        ${esc(t.name || t.language || 'Track ' + (t.index + 1))} · ${shortCodec(t.codec)}</option>`).join('')}</select></div>
+    ${tracks.length < 2 ? '<small>This file has a single audio track.</small>' : '<small>Switching reloads the video through the remux engine.</small>'}`;
   $('#atrack').addEventListener('change', e => {
     const i = S.cur;
     const item = S.list[i];
     if (!item) return;
     item.ai = +e.target.value;
-    item.attempt = item.attempts.findIndex(a => a.tier === 2 && !a.noAudio);
+    // a different audio track may need direct-track playback — force the remux engine
+    if (!item.attempts.some(a => a.tier === 2)) item.attempts = planFor(item);
+    item.attempt = item.attempts.findIndex(a => a.tier === 2 && a.noAudio === false);
     if (item.attempt < 0) item.attempt = 0;
     load(i, true);
   });
@@ -1162,6 +1210,7 @@ function updateMenu() {
   $('#mSh').textContent = S.shuf ? 'on' : 'off';
   $('#mRep').textContent = ['off', 'all', 'one'][S.rep];
   $('#mViz').classList.toggle('on', S.viz);
+  $('#mPipAuto').classList.toggle('on', S.pipAuto);
 }
 function toggleDrawer() {
   const side = $('#side');
@@ -1379,6 +1428,25 @@ function syncFsIcons() {
   layout();
 }
 document.addEventListener('fullscreenchange', syncFsIcons);
+
+/* -------------------------------------------------------------- auto PiP */
+
+let pipAutoOpen = false;          // was PiP entered automatically (tab hidden)?
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (!S.pipAuto) return;
+    if (document.fullscreenElement || document.pictureInPictureElement) return;
+    if (!S.hasSrc || v.paused || v.readyState < 2 || !v.videoWidth) return;
+    if (v.disablePictureInPicture) return;
+    try {
+      v.requestPictureInPicture().then(() => { pipAutoOpen = true; })
+        .catch(() => { /* PiP may be unsupported / gesture-gated */ });
+    } catch {}
+  } else if (document.pictureInPictureElement && pipAutoOpen) {
+    document.exitPictureInPicture().catch(() => {});
+  }
+});
+v.addEventListener('leavepictureinpicture', () => { pipAutoOpen = false; });
 
 /* ----------------------------------------------------------------- drop */
 

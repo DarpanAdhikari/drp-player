@@ -480,6 +480,9 @@ h3{font-size:11px;color:var(--mu);margin:20px 0 8px;font-weight:700;letter-spaci
       </div>
       <div class="f"><span>Delay</span><div class="tb" style="margin:0"><button class="b" data-a="sdm">−0.1</button><button class="b" data-a="sdp">+0.1</button></div><small id="sdv">0s</small></div>
       <div class="f"><span>Size</span><input type="range" id="ssz" min="14" max="64" value="26"><small></small></div>
+      <h3>Embedded in file</h3>
+      <div class="tb"><button class="b" data-a="subscan"><svg class="i"><use href="#i-cc"/></svg>List embedded subtitles</button></div>
+      <div id="subscan"></div>
       <small>Drop a subtitle with the same file name as a video and it loads automatically.</small>
     </section>
     <section class="pn" id="p-info"><div id="kl"></div></section>
@@ -502,6 +505,7 @@ h3{font-size:11px;color:var(--mu);margin:20px 0 8px;font-weight:700;letter-spaci
   <h4>Tools</h4>
   <button class="mi" data-a="snap"><svg class="i"><use href="#i-cam"/></svg>Screenshot</button>
   <button class="mi" data-a="pip"><svg class="i"><use href="#i-pip"/></svg>Picture in picture</button>
+  <button class="mi on" id="mPipAuto" data-a="pipauto"><svg class="i"><use href="#i-pip"/></svg>Auto PiP when tab hidden</button>
   <button class="mi" data-a="stats"><svg class="i"><use href="#i-chart"/></svg>Playback stats</button>
   <button class="mi on" id="mViz" data-a="viz"><svg class="i"><use href="#i-chart"/></svg>Visualizer (audio)</button>
   <button class="mi" data-a="info"><svg class="i"><use href="#i-info"/></svg>File info</button>
