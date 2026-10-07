@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>Reel — Pro Media Player</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230b0d10'/><path d='M11 8l13 8-13 8z' fill='%237aa2ff'/></svg>">
+<script type="importmap">
+{"imports":{"mediabunny":"./vendor/mediabunny.mjs","hls.js/light":"./vendor/hls.light.min.mjs"}}
+</script>
+<style>
+:root{
+  --bg:#0b0d10;--p:#12151b;--p2:#1a1f27;--p3:#232a35;--ln:#272e39;--ln2:#333c4a;
+  --tx:#e9edf4;--tx2:#c3cad6;--mu:#8d97a8;--ac:#7aa2ff;--ac-d:#5b86f0;
+  --ok:#5eead4;--warn:#fbbf24;--err:#fb7185;
+  --r-s:8px;--r:12px;--r-l:16px;
+  --sh:0 12px 40px rgba(0,0,0,.5);--sh-s:0 4px 16px rgba(0,0,0,.35);
+  --sb:360px;--top:52px;
+  --fs:26px;
+  --ease:cubic-bezier(.22,1,.36,1);
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;-webkit-tap-highlight-color:transparent}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:6px}
+::selection{background:#7aa2ff44}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#2c3441;border-radius:8px;border:2px solid var(--p)}
+::-webkit-scrollbar-thumb:hover{background:#3a4453}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ============================== layout ============================== */
+#app{display:grid;grid-template:"top top" var(--top) "stage side" minmax(0,1fr)/minmax(0,1fr) var(--sb);height:100%;height:100dvh}
+#app.hideside{grid-template-columns:minmax(0,1fr) 0}
+#app.th{grid-template-columns:minmax(0,1fr) 0;--top:0px}
+#app.th #side,#app.th #top{display:none}
+#app.th #stage{grid-area:stage}
+
+/* ============================== top bar ============================= */
+#top{grid-area:top;display:flex;align-items:center;gap:8px;padding:0 10px 0 14px;background:var(--p);border-bottom:1px solid var(--ln);min-width:0;position:relative;z-index:30;transition:transform .3s var(--ease),opacity .3s}
+.logo{display:flex;align-items:center;gap:8px;font-weight:800;letter-spacing:-.4px;font-size:15px;white-space:nowrap;user-select:none}
+.logo svg{width:22px;height:22px;color:var(--ac)}
+#now{display:flex;align-items:center;gap:10px;min-width:0;margin-left:6px}
+#title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:44vw;color:var(--tx2)}
+#title.on{color:var(--tx)}
+#badge{flex:none;display:none;align-items:center;gap:5px;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:3px 8px;border-radius:99px;background:#7aa2ff1f;color:var(--ac);border:1px solid #7aa2ff44;white-space:nowrap}
+#badge.on{display:inline-flex}
+#badge.warn{background:#fbbf241f;color:var(--warn);border-color:#fbbf2444}
+#badge.ok{background:#5eead41f;color:var(--ok);border-color:#5eead444}
+
+/* ============================== buttons ============================= */
+.ib{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:0;background:none;border-radius:10px;cursor:pointer;color:var(--tx2);flex:none;transition:background .15s,color .15s,transform .1s}
+.ib:hover{background:#ffffff14;color:var(--tx)}
+.ib:active{transform:scale(.93)}
+.ib.on{color:var(--ac);background:#7aa2ff1f}
+.ib.big{width:42px;height:42px}
+.ib.xl{width:52px;height:52px;border-radius:14px}
+.i{width:20px;height:20px;display:block;pointer-events:none}
+.i.s{width:16px;height:16px}
+.b{display:inline-flex;align-items:center;gap:7px;background:var(--p2);border:1px solid var(--ln);color:var(--tx2);padding:8px 14px;border-radius:10px;cursor:pointer;font-weight:600;font-size:13px;transition:background .15s,border-color .15s,color .15s,transform .1s}
+.b:hover{background:var(--p3);border-color:var(--ln2);color:var(--tx)}
+.b:active{transform:scale(.97)}
+.b.on{color:var(--ac);border-color:#7aa2ff55;background:#7aa2ff14}
+.b.primary{background:var(--ac);border-color:var(--ac);color:#081020;font-weight:700}
+.b.primary:hover{background:var(--ac-d);border-color:var(--ac-d)}
+.b.ghost{background:none;border-color:transparent}
+.b.ghost:hover{background:#ffffff12}
+.b.danger{color:var(--err)}
+.b .i{width:17px;height:17px}
+.sp{flex:1}
+.spd{display:inline-block;min-width:34px;text-align:center;font-variant-numeric:tabular-nums;font-weight:700}
+
+/* ============================== stage =============================== */
+#stage{grid-area:stage;position:relative;min-width:0;min-height:0;background:#000}
+#wrap{position:absolute;inset:0;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;display:flex;align-items:center;justify-content:center}
+video#v{display:block;max-width:none;transition:transform .18s var(--ease);background:#000}
+#viz{position:absolute;inset:0;width:100%;height:100%;display:none;pointer-events:none}
+#sub{position:absolute;left:5%;right:5%;bottom:7%;text-align:center;pointer-events:none;font-size:var(--fs);font-weight:600;line-height:1.3;text-shadow:0 0 4px #000,0 2px 10px #000;transition:bottom .25s;z-index:4}
+#app:not(.idle) #sub{bottom:120px}
+#osd{position:absolute;top:64px;right:20px;background:rgba(5,7,10,.78);backdrop-filter:blur(10px);padding:9px 16px;border-radius:12px;font-size:15px;font-weight:650;opacity:0;transition:opacity .18s,transform .18s;pointer-events:none;z-index:40;border:1px solid #ffffff14;transform:translateY(-6px)}
+#osd.on{opacity:1;transform:none}
+#stats{position:absolute;top:64px;left:16px;background:rgba(5,7,10,.8);backdrop-filter:blur(10px);padding:12px 14px;border-radius:12px;font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;white-space:pre;display:none;pointer-events:none;z-index:35;border:1px solid #ffffff12}
+#banner{position:absolute;top:64px;left:50%;transform:translateX(-50%) translateY(-8px);background:rgba(5,7,10,.85);backdrop-filter:blur(10px);border:1px solid #ffffff1a;color:var(--tx2);padding:8px 16px;border-radius:99px;font-size:13px;font-weight:600;display:none;align-items:center;gap:8px;z-index:36;max-width:min(90%,560px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:.25s var(--ease);pointer-events:none}
+#banner.on{display:flex;transform:translateX(-50%)}
+#banner .i{width:15px;height:15px;color:var(--ac);flex:none}
+
+/* ---- empty state ---- */
+#empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;color:var(--mu);z-index:5;padding:24px;background:radial-gradient(900px 500px at 50% 30%,#131a2a 0%,#0000 70%)}
+#empty.gone{display:none}
+#empty .mark{width:88px;height:88px;border-radius:26px;background:linear-gradient(145deg,#171d29,#10131a);border:1px solid var(--ln2);display:flex;align-items:center;justify-content:center;box-shadow:var(--sh);position:relative}
+#empty .mark svg{width:40px;height:40px;color:var(--ac)}
+#empty .mark::after{content:"";position:absolute;inset:-14px;border-radius:34px;border:1px dashed #7aa2ff33;animation:spin 24s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#empty h1{color:var(--tx);font-size:26px;letter-spacing:-.6px}
+#empty p{max-width:420px;line-height:1.6;font-size:13.5px}
+#empty .acts{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:2px}
+kbd{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--p2);border:1px solid var(--ln);border-bottom-width:2px;border-radius:6px;padding:1px 7px;color:var(--tx2);white-space:nowrap}
+
+/* ---- loading overlay ---- */
+#load{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(4,6,9,.72);backdrop-filter:blur(6px);z-index:50;text-align:center;padding:24px}
+#load.on{display:flex}
+.ring{position:relative;width:104px;height:104px}
+.ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:5;stroke-linecap:round}
+.ring .t{stroke:#ffffff1c}
+.ring .p{stroke:var(--ac);stroke-dasharray:301.6;stroke-dashoffset:301.6;transition:stroke-dashoffset .3s}
+.ring.indet .p{stroke-dasharray:70 232;animation:indet 1.1s linear infinite;transition:none}
+@keyframes indet{to{stroke-dashoffset:-301.6}}
+.ring .n{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;letter-spacing:-.3px}
+#ldTxt{font-size:15.5px;font-weight:700}
+#ldSub{font-size:12.5px;color:var(--mu);max-width:440px;min-height:18px}
+#ldCancel{margin-top:6px}
+.tiers{display:flex;gap:6px;margin-top:2px}
+.tiers i{font-style:normal;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;border:1px solid var(--ln2);color:var(--mu);letter-spacing:.3px}
+.tiers i.on{border-color:var(--ac);color:var(--ac);background:#7aa2ff14}
+.tiers i.done{color:var(--ok);border-color:#5eead444}
+.tiers i.fail{color:var(--err);border-color:#fb718544;text-decoration:line-through}
+
+/* ---- tap ripple / double-tap zones ---- */
+.dt{position:absolute;top:50%;width:76px;height:76px;margin:-38px 0 0 -38px;border-radius:50%;background:#ffffff1f;display:none;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:#fff;pointer-events:none;z-index:20;backdrop-filter:blur(4px)}
+.dt.on{display:flex;animation:dtpop .45s var(--ease)}
+@keyframes dtpop{0%{transform:scale(.4);opacity:0}30%{transform:scale(1);opacity:1}100%{transform:scale(1.25);opacity:0}}
+#dtL{left:22%}#dtR{right:22%}
+
+/* ---- gesture indicators (brightness / volume) ---- */
+.gind{position:absolute;top:50%;transform:translateY(-50%);width:52px;padding:14px 0;background:rgba(5,7,10,.72);backdrop-filter:blur(8px);border:1px solid #ffffff1a;border-radius:14px;display:none;flex-direction:column;align-items:center;gap:8px;z-index:25;pointer-events:none}
+.gind.on{display:flex}
+.gind span{font-size:15px}
+.gind i{position:relative;width:5px;height:110px;background:#ffffff26;border-radius:4px;overflow:hidden}
+.gind i::after{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--p,0%);background:linear-gradient(180deg,var(--ac),#a5c0ff);border-radius:4px}
+#gbL{left:26px}#gbR{right:26px}
+#gbL i::after{background:linear-gradient(180deg,#fbbf24,#fde68a)}
+.gind b{font-size:10px;font-weight:700;color:var(--mu);letter-spacing:.5px}
+
+/* ---- seek bubble ---- */
+#gbS{position:absolute;top:26%;transform:translateX(-50%);background:rgba(5,7,10,.85);backdrop-filter:blur(8px);border:1px solid #ffffff1f;border-radius:12px;padding:8px 14px;font-weight:750;font-size:15px;display:none;z-index:26;pointer-events:none;flex-direction:column;align-items:center;gap:4px;min-width:110px}
+#gbS.on{display:flex}
+#gbS canvas{width:132px;height:74px;border-radius:8px;background:#111;display:none}
+#gbS small{color:var(--mu);font-weight:600;font-size:11px}
+
+/* ---- big center play (idle) ---- */
+#bigPlay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(.9);width:76px;height:76px;border-radius:50%;border:0;background:#7aa2ffdd;color:#06101f;display:none;align-items:center;justify-content:center;cursor:pointer;z-index:15;box-shadow:0 10px 34px rgba(0,0,0,.5);transition:.22s var(--ease);backdrop-filter:blur(6px)}
+#bigPlay svg{width:32px;height:32px;margin-left:3px}
+#bigPlay.on{display:flex}
+#bigPlay:hover{transform:translate(-50%,-50%) scale(1.06);background:var(--ac)}
+
+/* ============================== control deck ======================== */
+#ctl{position:absolute;left:0;right:0;bottom:0;padding:46px 14px 10px;background:linear-gradient(transparent,#000000e6 42%);transition:opacity .3s;z-index:20}
+.idle #ctl{opacity:0;pointer-events:none}
+.idle #wrap{cursor:none}
+.idle #top{opacity:.0;pointer-events:none}
+@media(min-width:901px){.idle #top{opacity:1;pointer-events:auto}}
+
+/* seek bar */
+#sk{position:relative;height:22px;cursor:pointer;touch-action:none;margin-bottom:2px}
+#sk .hit{position:absolute;inset:-6px 0}
+.trk{position:absolute;left:0;right:0;top:9px;height:4px;background:#ffffff2e;border-radius:4px;transition:height .12s,top .12s;overflow:visible}
+#sk:hover .trk,#sk.drag .trk{height:7px;top:7.5px}
+.trk>div{position:absolute;top:0;bottom:0;left:0;border-radius:4px}
+#bf{background:#ffffff38}
+#ab{background:#ffb454aa}
+#pg{background:linear-gradient(90deg,var(--ac-d),var(--ac));position:relative}
+#pg::after{content:"";position:absolute;right:-7px;top:50%;width:14px;height:14px;margin-top:-7px;border-radius:50%;background:#fff;transform:scale(0);transition:transform .12s;box-shadow:0 2px 8px #0009}
+#sk:hover #pg::after,#sk.drag #pg::after{transform:scale(1)}
+#mk{position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none}
+#mk i{position:absolute;top:3px;width:3px;height:16px;background:#ffb454;border-radius:2px;margin-left:-1px;pointer-events:none;box-shadow:0 0 0 1px #0006}
+#tip{position:absolute;bottom:28px;transform:translateX(-50%);display:none;text-align:center;pointer-events:none;background:#0a0d12e6;border:1px solid #ffffff1f;border-radius:10px;padding:5px;font-size:12px;font-weight:650;z-index:5;box-shadow:var(--sh-s)}
+#sk:hover #tip{display:block}
+#tip canvas{display:block;width:160px;height:90px;border-radius:6px;background:#111}
+#tip b{display:block;padding:3px 4px 1px;font-variant-numeric:tabular-nums}
+
+/* deck rows */
+#deck{display:flex;align-items:center;gap:2px;flex-wrap:nowrap;min-width:0}
+#tm{margin:0 8px;font-variant-numeric:tabular-nums;color:#cfd6e0;font-size:13px;font-weight:600;white-space:nowrap}
+#bPlay{background:#ffffff14}
+#bPlay:hover{background:#ffffff22}
+#vol{width:96px;accent-color:var(--ac);cursor:pointer}
+.sep{width:1px;height:22px;background:#ffffff1c;margin:0 6px;flex:none}
+.d-m{display:none}
+
+input[type=range]{accent-color:var(--ac);cursor:pointer}
+input[type=range].eq{writing-mode:vertical-lr;direction:rtl;height:112px;width:26px}
+select{background:var(--p2);color:var(--tx);border:1px solid var(--ln);border-radius:8px;padding:8px 10px;font:inherit;width:100%;cursor:pointer}
+select:hover{border-color:var(--ln2)}
+small{color:var(--mu)}
+.f{display:grid;grid-template-columns:92px 1fr 46px;gap:10px;align-items:center;margin:12px 0}
+.f>span{color:var(--tx2);font-weight:600;font-size:13px}
+.f small{text-align:right;font-variant-numeric:tabular-nums}
+h3{font-size:11px;color:var(--mu);margin:20px 0 8px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--ln);font-size:13px}
+.kv span{color:var(--mu)}
+.kv b{font-weight:650;text-align:right;word-break:break-all}
+
+/* ============================== sidebar ============================= */
+#side{grid-area:side;background:var(--p);border-left:1px solid var(--ln);display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;z-index:34}
+#app.hideside #side,#app.th #side{border-left:0}
+#tabs{display:flex;border-bottom:1px solid var(--ln);padding:0 4px;flex:none;background:var(--p)}
+#tabs button{flex:1;background:none;border:0;color:var(--mu);padding:13px 2px 11px;cursor:pointer;font-weight:650;font-size:12.5px;border-bottom:2px solid transparent;transition:color .15s;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#tabs button:hover{color:var(--tx2)}
+#tabs button.on{color:var(--ac);border-color:var(--ac)}
+.pn{display:none;flex:1;overflow:auto;padding:14px;overscroll-behavior:contain}
+.pn.on{display:block}
+.tb{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}
+.tb .b{padding:7px 11px;font-size:12.5px}
+
+/* queue */
+.qit{display:flex;gap:11px;align-items:center;padding:8px;border-radius:12px;cursor:pointer;border:1px solid transparent;transition:background .12s,border-color .12s;position:relative;background:transparent}
+.qit:hover{background:var(--p2)}
+.qit.on{background:#7aa2ff14;border-color:#7aa2ff44}
+.qit.drag{opacity:.35}
+.qit.over{border-top:2px solid var(--ac)}
+.qit img,.ph{width:78px;height:46px;border-radius:8px;object-fit:cover;background:#000;flex:none;display:flex;align-items:center;justify-content:center;color:var(--mu);border:1px solid #ffffff10}
+.ph .i{width:20px;height:20px}
+.qit .nm{flex:1;min-width:0}
+.qit .nm b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px}
+.qit .nm small{display:flex;gap:6px;align-items:center;font-size:11.5px;margin-top:2px}
+.qit .x{background:none;border:0;color:var(--mu);font-size:17px;cursor:pointer;width:28px;height:28px;border-radius:8px;flex:none;opacity:0;transition:.15s}
+.qit:hover .x{opacity:1}
+.qit .x:hover{background:#fb718522;color:var(--err)}
+.qit .eqb{display:none;gap:2px;align-items:flex-end;height:14px;position:absolute;left:11px;bottom:11px}
+.qit.on .eqb{display:flex}
+.qit.on .nm{padding-left:2px}
+.qit .eqb i{width:3px;background:var(--ac);border-radius:2px;animation:eqb 1s ease-in-out infinite alternate}
+.qit .eqb i:nth-child(1){height:6px;animation-delay:0s}
+.qit .eqb i:nth-child(2){height:12px;animation-delay:.2s}
+.qit .eqb i:nth-child(3){height:8px;animation-delay:.4s}
+.qit.on.paused .eqb i{animation-play-state:paused}
+@keyframes eqb{to{height:13px}}
+.tchip{font-size:10px;font-weight:800;letter-spacing:.4px;padding:1px 6px;border-radius:99px;background:#7aa2ff1a;color:var(--ac);border:1px solid #7aa2ff33;text-transform:uppercase}
+.tchip.w{background:#fbbf241a;color:var(--warn);border-color:#fbbf2433}
+.tchip.e{background:#fb71851a;color:var(--err);border-color:#fb718533}
+#qh{display:block;margin-top:10px;font-size:11.5px}
+
+/* eq */
+#eqs{display:flex;justify-content:space-between;margin:14px 0 6px;gap:4px}
+#eqs label{display:flex;flex-direction:column;align-items:center;gap:7px}
+#eqs small{font-size:10.5px;font-weight:650}
+#ml{display:flex;gap:7px;flex-wrap:wrap}
+#ml button{background:var(--p2);color:var(--warn);border:1px solid var(--ln);border-radius:8px;padding:5px 10px;cursor:pointer;font-size:12.5px;font-weight:650}
+#ml button:hover{border-color:#fbbf2466}
+
+/* ============================== menu / modal ======================== */
+#scrim{position:fixed;inset:0;background:#00000099;backdrop-filter:blur(3px);z-index:60;opacity:0;pointer-events:none;transition:opacity .25s}
+#scrim.on{opacity:1;pointer-events:auto}
+#menu{position:fixed;top:calc(var(--top) + 6px);right:10px;width:280px;background:var(--p);border:1px solid var(--ln2);border-radius:14px;box-shadow:var(--sh);z-index:70;padding:7px;display:none;max-height:calc(100dvh - var(--top) - 20px);overflow:auto}
+#menu.on{display:block;animation:mpop .16s var(--ease)}
+@keyframes mpop{from{opacity:0;transform:translateY(-6px) scale(.98)}}
+#menu .mi{display:flex;align-items:center;gap:11px;width:100%;background:none;border:0;color:var(--tx2);padding:10px 12px;border-radius:9px;cursor:pointer;font-weight:600;font-size:13.5px;text-align:left}
+#menu .mi:hover{background:var(--p2);color:var(--tx)}
+#menu .mi .i{width:17px;height:17px;color:var(--mu);flex:none}
+#menu .mi .v{margin-left:auto;color:var(--mu);font-size:12px;font-weight:650}
+#menu .msep{height:1px;background:var(--ln);margin:6px 8px}
+#menu h4{font-size:10.5px;color:var(--mu);letter-spacing:.7px;text-transform:uppercase;padding:8px 12px 4px;font-weight:750}
+
+#help{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:80;padding:24px}
+#help.on{display:flex}
+#help .card{background:var(--p);border:1px solid var(--ln2);border-radius:18px;box-shadow:var(--sh);width:min(680px,100%);max-height:86dvh;overflow:auto;padding:22px 24px;animation:mpop .2s var(--ease)}
+#help h2{font-size:18px;letter-spacing:-.4px;margin-bottom:4px}
+#help .g{display:grid;grid-template-columns:1fr 1fr;gap:0 26px;margin-top:8px}
+#help .kv{font-size:13px}
+#help .close{position:sticky;top:0;float:right;margin:-6px -6px 0 0}
+
+/* ============================== drop overlay ======================== */
+#drop{position:fixed;inset:12px;border:2px dashed var(--ac);border-radius:18px;background:#7aa2ff14;display:none;align-items:center;justify-content:center;font-size:20px;font-weight:750;z-index:90;pointer-events:none;backdrop-filter:blur(2px);gap:10px}
+#drop.on{display:flex}
+#drop svg{width:28px;height:28px;color:var(--ac)}
+
+/* ============================== mobile ============================== */
+@media(max-width:900px){
+  #app{grid-template:"top" var(--top) "stage" minmax(0,1fr)/minmax(0,1fr)}
+  #top{padding:0 6px 0 8px;gap:4px}
+  .logo{display:none}
+  #title{max-width:38vw;font-size:13.5px}
+  #side{position:fixed;top:0;right:0;bottom:0;width:min(88vw,360px);transform:translateX(102%);transition:transform .3s var(--ease);box-shadow:var(--sh);border-left:1px solid var(--ln2);z-index:65}
+  #side.open{transform:none}
+  #app.hideside #side,#app.th #side{display:flex}
+  #tabs{padding-top:env(safe-area-inset-top)}
+  .d-d{display:none!important}
+  .d-m{display:inline-flex}
+  #ctl{padding:40px 10px calc(8px + env(safe-area-inset-bottom))}
+  #vol{display:none}
+  #tm{margin:0 4px;font-size:12.5px}
+  #menu{top:auto;right:8px;left:8px;bottom:calc(8px + env(safe-area-inset-bottom));width:auto;max-height:70dvh}
+  #help .g{grid-template-columns:1fr}
+  #osd,#stats{top:calc(56px + env(safe-area-inset-top))}
+  #banner{top:calc(56px + env(safe-area-inset-top))}
+}
+@media(max-width:900px) and (orientation:landscape){
+  #top{display:none}
+  :root{--top:0px}
+  #osd,#stats,#banner{top:14px}
+}
+@media(max-width:560px){
+  #empty h1{font-size:22px}
+  .ring{width:88px;height:88px}
+  .deck-extra{display:none!important}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition:none!important;animation-duration:.001s!important}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.2v13.6L19 12z" fill="currentColor"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.6v14H7zM13.4 5H17v14h-3.6z" fill="currentColor"/></symbol>
+<symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 6h2.4v12H6zM19.5 6l-9.6 6 9.6 6z" fill="currentColor"/></symbol>
+<symbol id="i-next" viewBox="0 0 24 24"><path d="M15.6 6H18v12h-2.4zM4.5 6l9.6 6-9.6 6z" fill="currentColor"/></symbol>
+<symbol id="i-vol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z"/><path d="M15.5 9a4.5 4.5 0 0 1 0 6"/><path d="M18 6.5a8 8 0 0 1 0 11"/></symbol>
+<symbol id="i-mute" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></symbol>
+<symbol id="i-max" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5.5A2.5 2.5 0 0 0 3 5.5V8M16 3h2.5A2.5 2.5 0 0 1 21 5.5V8M21 16v2.5a2.5 2.5 0 0 1-2.5 2.5H16M8 21H5.5A2.5 2.5 0 0 1 3 18.5V16"/></symbol>
+<symbol id="i-min" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v2.5A2.5 2.5 0 0 1 5.5 8H3M16 3v2.5A2.5 2.5 0 0 0 18.5 8H21M21 16h-2.5a2.5 2.5 0 0 0-2.5 2.5V21M8 21v-2.5A2.5 2.5 0 0 1 5.5 16H3"/></symbol>
+<symbol id="i-pip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="12" width="7" height="5" rx="1"/></symbol>
+<symbol id="i-cam" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.2l1.6-2h5.4l1.6 2h2.2A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="13" r="3.4"/></symbol>
+<symbol id="i-theater" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="1.5"/><path d="M8 6v12M16 6v12"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21.5 19a2 2 0 0 1-2 2h-15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.3l2 3h8.7a2 2 0 0 1 2 2z"/></symbol>
+<symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10.5 13.5a4.5 4.5 0 0 0 6.79.46l2.5-2.5a4.5 4.5 0 0 0-6.36-6.36l-1.44 1.43"/><path d="M13.5 10.5a4.5 4.5 0 0 0-6.79-.46l-2.5 2.5a4.5 4.5 0 1 0 6.36 6.36l1.42-1.42"/></symbol>
+<symbol id="i-shuffle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
+<symbol id="i-repeat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 20V10M12 20V4M6 20v-6"/></symbol>
+<symbol id="i-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.2a3 3 0 0 1 5.6 1c0 2-2.8 2.6-2.8 4"/><path d="M12 17.2h.01"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+<symbol id="i-cc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2.5"/><text x="12" y="15.5" text-anchor="middle" font-size="8" font-weight="800" fill="currentColor" stroke="none" font-family="system-ui">CC</text></symbol>
+<symbol id="i-rotl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4v6h6"/><path d="M3.5 14.5a8.5 8.5 0 1 0 2-8.5L2 10"/></symbol>
+<symbol id="i-rotr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 4v6h-6"/><path d="M20.5 14.5a8.5 8.5 0 1 1-2-8.5L22 10"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/></symbol>
+<symbol id="i-type" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7V4.5h16V7M9.5 20h5M12 4.5V20"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6h17M8 6V4h8v2M6 6l1 14h10l1-14"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 16.5v-5M12 8h.01"/></symbol>
+<symbol id="i-dots" viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="18.5" r="1.8" fill="currentColor"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+<symbol id="i-film" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8 4v16M16 4v16M3 12h18M3 8h5M16 8h5M3 16h5M16 16h5"/></symbol>
+<symbol id="i-drop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
+<symbol id="i-wand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 4V2M15 10V8M12.5 6h-2M19.5 6h-2M4 20L14 10M17.5 10.5l-2-2"/></symbol>
+</defs></svg>
+
+<div id="app">
+  <header id="top">
+    <button class="ib d-m" id="bDrawer" title="Queue"><svg class="i"><use href="#i-menu"/></svg></button>
+    <span class="logo"><svg><use href="#i-film"/></svg>Reel</span>
+    <div id="now"><b id="title"></b><span id="badge"></span></div>
+    <span class="sp"></span>
+    <button class="ib" data-a="open" title="Open files (O)"><svg class="i"><use href="#i-plus"/></svg></button>
+    <button class="ib d-d" data-a="url" title="Open URL (U)"><svg class="i"><use href="#i-link"/></svg></button>
+    <button class="ib d-d" data-a="stats" id="bStats" title="Playback stats (Y)"><svg class="i"><use href="#i-chart"/></svg></button>
+    <button class="ib" data-a="help" title="Shortcuts (?)"><svg class="i"><use href="#i-help"/></svg></button>
+    <button class="ib d-d" id="bSide" data-a="side" title="Toggle panel"><svg class="i"><use href="#i-list"/></svg></button>
+    <button class="ib d-d" id="bTh" data-a="theater" title="Theater (T)"><svg class="i"><use href="#i-theater"/></svg></button>
+    <button class="ib" data-a="fs" id="bFsTop" title="Fullscreen (F)"><svg class="i"><use href="#i-max"/></svg></button>
+    <button class="ib" data-a="gear" id="bGear" title="Settings"><svg class="i"><use href="#i-gear"/></svg></button>
+  </header>
+
+  <section id="stage">
+    <div id="wrap">
+      <video id="v" playsinline preload="metadata"></video>
+      <canvas id="viz"></canvas>
+
+      <div id="sub"></div>
+      <div id="osd"></div>
+      <div id="stats"></div>
+      <div id="banner"><svg class="i"><use href="#i-info"/></svg><span></span></div>
+
+      <div class="gind" id="gbL"><b>BRIGHTNESS</b><i></i><span>☀</span></div>
+      <div class="gind" id="gbR"><b>VOLUME</b><i></i><span>🔊</span></div>
+      <div id="gbS"><canvas width="132" height="74"></canvas><span>0:00</span><small>swipe to seek</small></div>
+      <div class="dt" id="dtL"><span>−10</span></div>
+      <div class="dt" id="dtR"><span>+10</span></div>
+
+      <button id="bigPlay" title="Play"><svg viewBox="0 0 24 24"><use href="#i-play"/></svg></button>
+
+      <div id="empty">
+        <div class="mark"><svg viewBox="0 0 24 24"><use href="#i-film"/></svg></div>
+        <h1>Reel</h1>
+        <p>Drop videos or audio anywhere, or open files to build a queue.<br>
+        Plays MP4, <b>MKV</b>, TS, WebM, AVI<sup>†</sup> and 40+ formats — locally, in your browser.</p>
+        <div class="acts">
+          <button class="b primary" data-a="open"><svg class="i"><use href="#i-plus"/></svg>Open files</button>
+          <button class="b" data-a="folder"><svg class="i"><use href="#i-folder"/></svg>Folder</button>
+          <button class="b" data-a="url"><svg class="i"><use href="#i-link"/></svg>URL</button>
+        </div>
+        <small><sup>†</sup> exotic files are converted on-device with ffmpeg — nothing is uploaded. Press <kbd>?</kbd> for shortcuts.</small>
+      </div>
+
+      <div id="load">
+        <div class="ring indet" id="ring">
+          <svg viewBox="0 0 104 104"><circle class="t" cx="52" cy="52" r="48"/><circle class="p" cx="52" cy="52" r="48"/></svg>
+          <div class="n" id="ldPct"></div>
+        </div>
+        <div id="ldTxt">Preparing…</div>
+        <div id="ldSub"></div>
+        <div class="tiers" id="ldTiers"></div>
+        <button class="b" id="ldCancel" hidden><svg class="i"><use href="#i-x"/></svg>Cancel</button>
+      </div>
+
+      <div id="ctl">
+        <div id="sk">
+          <div class="trk"><div id="bf"></div><div id="ab"></div><div id="pg"></div></div>
+          <div id="mk"></div>
+          <div id="tip"><canvas id="pc" width="160" height="90"></canvas><b>0:00</b></div>
+        </div>
+        <div id="deck">
+          <button class="ib d-d" data-a="prev" title="Previous (P)"><svg class="i"><use href="#i-prev"/></svg></button>
+          <button class="ib big" id="bPlay" data-a="play" title="Play / pause (Space)"><svg class="i"><use href="#i-play"/></svg></button>
+          <button class="ib" data-a="next" title="Next (N)"><svg class="i"><use href="#i-next"/></svg></button>
+          <span id="tm">0:00 / 0:00</span>
+          <span class="sp"></span>
+          <button class="ib d-d" data-a="mute" id="bMute" title="Mute (M)"><svg class="i"><use href="#i-vol"/></svg></button>
+          <input type="range" id="vol" min="0" max="200" value="100" aria-label="Volume" class="d-d">
+          <span class="sep d-d"></span>
+          <button class="b spd d-d" id="bSp" data-a="speed" title="Speed ([ / ])"><span class="spd">1×</span></button>
+          <button class="ib d-d" id="bAB" data-a="ab" title="A–B loop (A)" style="font-weight:800;font-size:12px">A–B</button>
+          <button class="ib d-d deck-extra" id="bAs" data-a="aspect" title="Aspect (V)" style="font-size:11px;font-weight:750">Fit</button>
+          <button class="ib d-d deck-extra" data-a="rotl" title="Rotate (Shift+R)"><svg class="i"><use href="#i-rotl"/></svg></button>
+          <button class="ib d-d deck-extra" id="bCC" data-a="cc" title="Subtitles (C)"><svg class="i"><use href="#i-cc"/></svg></button>
+          <button class="ib d-d deck-extra" data-a="snap" title="Screenshot (S)"><svg class="i"><use href="#i-cam"/></svg></button>
+          <button class="ib d-d deck-extra" data-a="pip" title="Picture in picture (I)"><svg class="i"><use href="#i-pip"/></svg></button>
+          <button class="ib" data-a="gear" title="More settings"><svg class="i"><use href="#i-dots"/></svg></button>
+          <button class="ib" data-a="fs" title="Fullscreen (F)"><svg class="i"><use href="#i-max"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside id="side">
+    <div id="tabs">
+      <button data-tab="q" class="on">Queue</button>
+      <button data-tab="pic">Picture</button>
+      <button data-tab="aud">Audio</button>
+      <button data-tab="sub">Subtitles</button>
+      <button data-tab="info">Info</button>
+    </div>
+    <section class="pn on" id="p-q">
+      <div class="tb">
+        <button class="b" data-a="open"><svg class="i"><use href="#i-plus"/></svg>Files</button>
+        <button class="b" data-a="folder"><svg class="i"><use href="#i-folder"/></svg>Folder</button>
+        <button class="b" data-a="url"><svg class="i"><use href="#i-link"/></svg>URL</button>
+        <button class="b" id="bShuf" data-a="shuf"><svg class="i"><use href="#i-shuffle"/></svg>Shuffle</button>
+        <button class="b" id="bRep" data-a="rep"><svg class="i"><use href="#i-repeat"/></svg><span>Repeat: off</span></button>
+        <button class="b" data-a="sort">Sort</button>
+        <button class="b danger" data-a="clear"><svg class="i"><use href="#i-trash"/></svg>Clear</button>
+      </div>
+      <div id="q"></div><small id="qh">Drag items to reorder.</small>
+    </section>
+    <section class="pn" id="p-pic">
+      <div class="f"><span>Brightness</span><input type="range" class="fl" id="fb" min="0" max="200" value="100"><small>100</small></div>
+      <div class="f"><span>Contrast</span><input type="range" class="fl" id="fc" min="0" max="200" value="100"><small>100</small></div>
+      <div class="f"><span>Saturation</span><input type="range" class="fl" id="fs" min="0" max="300" value="100"><small>100</small></div>
+      <div class="f"><span>Hue</span><input type="range" class="fl" id="fh" min="-180" max="180" value="0"><small>0</small></div>
+      <div class="f"><span>Zoom</span><input type="range" id="fz" min="50" max="300" value="100"><small>100</small></div>
+      <div class="tb">
+        <button class="b" data-a="rotl"><svg class="i"><use href="#i-rotl"/></svg>Rotate</button>
+        <button class="b" data-a="rotr"><svg class="i"><use href="#i-rotr"/></svg>Rotate</button>
+        <button class="b" data-a="flip">⇋ Flip</button>
+        <button class="b" data-a="reset">Reset picture</button>
+      </div>
+      <h3>Bookmarks</h3>
+      <div class="tb"><button class="b" data-a="mark">Add at current time</button></div>
+      <div id="ml"></div>
+    </section>
+    <section class="pn" id="p-aud">
+      <div class="f"><span>Volume</span><input type="range" id="vol2" min="0" max="200" value="100"><small id="vl">100%</small></div>
+      <small>Above 100% boosts quiet audio.</small>
+      <div id="atracks"></div>
+      <h3>Equalizer</h3>
+      <select id="pre"></select>
+      <div id="eqs"></div>
+    </section>
+    <section class="pn" id="p-sub">
+      <div class="tb">
+        <button class="b" data-a="subload"><svg class="i"><use href="#i-type"/></svg>Load .srt / .vtt</button>
+        <button class="b" id="bCC2" data-a="cc">Show / hide</button>
+      </div>
+      <div class="f"><span>Delay</span><div class="tb" style="margin:0"><button class="b" data-a="sdm">−0.1</button><button class="b" data-a="sdp">+0.1</button></div><small id="sdv">0s</small></div>
+      <div class="f"><span>Size</span><input type="range" id="ssz" min="14" max="64" value="26"><small></small></div>
+      <small>Drop a subtitle with the same file name as a video and it loads automatically.</small>
+    </section>
+    <section class="pn" id="p-info"><div id="kl"></div></section>
+  </aside>
+</div>
+
+<div id="scrim"></div>
+
+<div id="menu" role="menu">
+  <h4>Playback</h4>
+  <button class="mi" data-a="speed"><svg class="i"><use href="#i-clock"/></svg>Speed<span class="v" id="mSp">1×</span></button>
+  <button class="mi" data-a="aspect"><svg class="i"><use href="#i-max"/></svg>Aspect ratio<span class="v" id="mAs">Fit</span></button>
+  <button class="mi" data-a="ab"><svg class="i"><use href="#i-repeat"/></svg>A–B loop<span class="v" id="mAb">off</span></button>
+  <div class="msep"></div>
+  <h4>Queue</h4>
+  <button class="mi" data-a="shuf"><svg class="i"><use href="#i-shuffle"/></svg>Shuffle<span class="v" id="mSh">off</span></button>
+  <button class="mi" data-a="rep"><svg class="i"><use href="#i-repeat"/></svg>Repeat<span class="v" id="mRep">off</span></button>
+  <button class="mi" data-a="side"><svg class="i"><use href="#i-list"/></svg>Toggle side panel</button>
+  <div class="msep"></div>
+  <h4>Tools</h4>
+  <button class="mi" data-a="snap"><svg class="i"><use href="#i-cam"/></svg>Screenshot</button>
+  <button class="mi" data-a="pip"><svg class="i"><use href="#i-pip"/></svg>Picture in picture</button>
+  <button class="mi" data-a="stats"><svg class="i"><use href="#i-chart"/></svg>Playback stats</button>
+  <button class="mi on" id="mViz" data-a="viz"><svg class="i"><use href="#i-chart"/></svg>Visualizer (audio)</button>
+  <button class="mi" data-a="info"><svg class="i"><use href="#i-info"/></svg>File info</button>
+  <button class="mi" data-a="help"><svg class="i"><use href="#i-help"/></svg>Keyboard shortcuts<span class="v">?</span></button>
+</div>
+
+<div id="help" role="dialog" aria-modal="true">
+  <div class="card">
+    <button class="ib close" data-a="help"><svg class="i"><use href="#i-x"/></svg></button>
+    <h2>Keyboard shortcuts</h2>
+    <small>Everything works while focus is on the player.</small>
+    <div class="g" id="kl2"></div>
+    <h2>Touch gestures</h2>
+    <div class="g">
+      <div class="kv"><span>Tap centre</span><kbd>show / hide controls</kbd></div>
+      <div class="kv"><span>Double-tap sides</span><kbd>∓10 s seek</kbd></div>
+      <div class="kv"><span>Swipe horizontally</span><kbd>scrub timeline</kbd></div>
+      <div class="kv"><span>Swipe left edge ↕</span><kbd>brightness</kbd></div>
+      <div class="kv"><span>Swipe right edge ↕</span><kbd>volume</kbd></div>
+      <div class="kv"><span>Long press</span><kbd>2× speed hold</kbd></div>
+      <div class="kv"><span>Pinch</span><kbd>zoom</kbd></div>
+      <div class="kv"><span>Double-click centre</span><kbd>fullscreen</kbd></div>
+    </div>
+  </div>
+</div>
+
+<div id="drop"><svg><use href="#i-drop"/></svg>Drop to add to queue</div>
+<input type="file" id="fi" multiple hidden accept="video/*,audio/*,.mkv,.avi,.mov,.flv,.wmv,.ts,.m4v,.flac,.opus,.srt,.vtt">
+<input type="file" id="fo" webkitdirectory hidden>
+<input type="file" id="fsub" accept=".srt,.vtt" hidden>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
